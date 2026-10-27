@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Token warna disimpan sebagai kanal RGB ("R G B") agar modifier opasitas
+ * Tailwind (mis. bg-primary/10) berfungsi. Nilai hex asli dari DESIGN.md
+ * dicantumkan di komentar setiap baris.
+ */
+@layer base {
+  :root {
+    --background: 246 248 250; /* #F6F8FA */
+    --foreground: 15 23 42; /* #0F172A */
+    --card: 255 255 255; /* #FFFFFF */
+    --card-foreground: 15 23 42;
+    --muted: 239 243 246; /* #EFF3F6 */
+    --muted-foreground: 71 85 105; /* #475569 */
+    --border: 226 232 240; /* #E2E8F0 */
+    --input: 255 255 255; /* #FFFFFF */
+    --input-border: 203 213 225; /* #CBD5E1 */
+    --primary: 14 116 144; /* #0E7490 */
+    --primary-foreground: 255 255 255;
+    --primary-hover: 21 94 117; /* #155E75 */
+    --primary-subtle: 236 254 255; /* #ECFEFF */
+    --primary-subtle-border: 165 243 252; /* #A5F3FC */
+    --accent-teal: 13 148 136; /* #0D9488 */
+  }
+
+  .dark {
+    --background: 11 18 24; /* #0B1218 */
+    --foreground: 241 245 249; /* #F1F5F9 */
+    --card: 17 27 36; /* #111B24 */
+    --card-foreground: 241 245 249;
+    --muted: 23 36 48; /* #172430 */
+    --muted-foreground: 148 163 184; /* #94A3B8 */
+    --border: 34 49 63; /* #22313F */
+    --input: 14 22 30; /* #0E161E */
+    --input-border: 42 59 76; /* #2A3B4C */
+    --primary: 34 211 238; /* #22D3EE */
+    --primary-foreground: 8 51 68; /* #083344 */
+    --primary-hover: 45 212 191; /* #2DD4BF */
+    --primary-subtle: 15 41 51; /* #0F2933 */
+    --primary-subtle-border: 22 78 99; /* #164E63 */
+    --accent-teal: 45 212 191; /* #2DD4BF */
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased min-h-screen;
+  }
+
+  ::selection {
+    background-color: rgb(var(--primary) / 0.2);
+  }
+
+  /* Indikator fokus keyboard yang jelas (R-32) */
+  :focus-visible {
+    outline: 2px solid rgb(var(--primary));
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+}
