@@ -3,6 +3,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CloudUpload, Lock, X, Loader2 } from "lucide-react";
 import { Button, Field, Notice, checkboxClass, inputClass } from "@/components/ui/form";
+import { compareStoredMetadata, type StoredMetadataReport } from "@/lib/push-verification";
+import { WIZARD_STEPS } from "@/lib/completeness";
 import { cn } from "@/lib/utils";
 
 interface PushGeoNodeModalProps {
@@ -12,6 +14,67 @@ interface PushGeoNodeModalProps {
   defaultBaseUrl?: string;
   defaultPk?: string;
   onDownloadManual: () => void;
+}
+
+interface PushResponse {
+  success?: boolean;
+  error?: string;
+  preserve?: { requested: boolean; ok: boolean; status: number | null };
+  verification?: { storedXml?: string; preserveFlag?: boolean; error?: string };
+}
+
+type Status =
+  | { type: "idle" }
+  | { type: "error"; message: string }
+  /** Tersimpan dan dibaca ulang; `report.lost` kosong berarti semua isian bertahan. */
+  | { type: "verified"; report: StoredMetadataReport; response: PushResponse }
+  /** Unggahan diterima tetapi hasilnya tidak bisa dibaca ulang. */
+  | { type: "unverified"; reason: string; response: PushResponse };
+
+/** Penjelasan status tanda metadata_uploaded_preserve setelah penyimpanan. */
+function PreserveNote({ response }: { response: PushResponse }) {
+  const { preserve, verification } = response;
+  if (!preserve?.requested) return null;
+  if (!preserve.ok) {
+    return (
+      <p className="text-[13px] leading-normal text-muted-foreground">
+        Tanda <code className="font-mono text-xs text-foreground">metadata_uploaded_preserve</code> tidak bisa dinyalakan lewat API
+        {preserve.status ? ` (HTTP ${preserve.status})` : ""}.
+      </p>
+    );
+  }
+  if (verification?.preserveFlag === false) {
+    return (
+      <p className="text-[13px] leading-normal text-muted-foreground">
+        API menerima permintaan, tetapi tanda <code className="font-mono text-xs text-foreground">metadata_uploaded_preserve</code> di dataset ini
+        masih nonaktif.
+      </p>
+    );
+  }
+  return null;
+}
+
+function LostParts({ report }: { report: StoredMetadataReport }) {
+  return (
+    <div className="space-y-2">
+      {WIZARD_STEPS.map((step) => {
+        const items = report.lost.filter((l) => l.step === step.number);
+        if (items.length === 0) return null;
+        return (
+          <div key={step.number}>
+            <p className="text-[13px] font-semibold">
+              Bab {step.number}: {step.title}
+            </p>
+            <ul className="list-disc space-y-0.5 pl-5 text-[13px]">
+              {items.map((item) => (
+                <li key={item.label}>{item.label}</li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function PushGeoNodeModal({
@@ -29,10 +92,7 @@ export function PushGeoNodeModal({
   const [preserveMetadata, setPreserveMetadata] = useState(true);
 
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{
-    type: "idle" | "success" | "error";
-    message: string;
-  }>({ type: "idle", message: "" });
+  const [status, setStatus] = useState<Status>({ type: "idle" });
 
   const firstFieldRef = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
@@ -44,7 +104,7 @@ export function PushGeoNodeModal({
     if (!isOpen) return;
     setBaseUrl((current) => current || defaultBaseUrl);
     setPk((current) => current || defaultPk);
-    setStatus({ type: "idle", message: "" });
+    setStatus({ type: "idle" });
     firstFieldRef.current?.focus();
 
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCloseRef.current();
@@ -58,15 +118,12 @@ export function PushGeoNodeModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!baseUrl.trim() || !pk.trim() || !username.trim() || !password) {
-      setStatus({
-        type: "error",
-        message: "Isi alamat server, ID dataset, username, dan password sebelum menyimpan.",
-      });
+      setStatus({ type: "error", message: "Isi alamat server, ID dataset, username, dan password sebelum menyimpan." });
       return;
     }
 
     setLoading(true);
-    setStatus({ type: "idle", message: "" });
+    setStatus({ type: "idle" });
 
     try {
       const res = await fetch("/api/geonode/push", {
@@ -77,33 +134,30 @@ export function PushGeoNodeModal({
           pk: pk.trim(),
           xml: xmlContent,
           preserveMetadata,
-          auth: {
-            username: username.trim(),
-            password,
-          },
+          auth: { username: username.trim(), password },
         }),
       });
+      const json: PushResponse = await res.json();
 
-      const json = await res.json();
+      if (!res.ok) {
+        setStatus({ type: "error", message: json.error || "GeoNode menolak penyimpanan metadata." });
+        return;
+      }
 
-      if (res.ok) {
-        setStatus({
-          type: "success",
-          message: json.message || "Metadata tersimpan di GeoNode.",
-        });
-        // Hapus password dari memori setelah berhasil
-        setPassword("");
-      } else {
-        setStatus({
-          type: "error",
-          message: json.error || "GeoNode menolak penyimpanan metadata.",
-        });
+      // Hapus password dari memori setelah GeoNode menerima unggahan
+      setPassword("");
+      const storedXml = json.verification?.storedXml;
+      if (!storedXml) {
+        setStatus({ type: "unverified", reason: json.verification?.error || "Metadata tidak bisa dibaca ulang.", response: json });
+        return;
+      }
+      try {
+        setStatus({ type: "verified", report: compareStoredMetadata(xmlContent, storedXml), response: json });
+      } catch (err: any) {
+        setStatus({ type: "unverified", reason: `XML yang tersimpan tidak bisa dibaca: ${err.message}`, response: json });
       }
     } catch (err: any) {
-      setStatus({
-        type: "error",
-        message: err.message || "Proxy GeoNode tidak bisa dihubungi.",
-      });
+      setStatus({ type: "error", message: err.message || "Proxy GeoNode tidak bisa dihubungi." });
     } finally {
       setLoading(false);
     }
@@ -126,7 +180,9 @@ export function PushGeoNodeModal({
               <CloudUpload className="h-4 w-4 text-primary" strokeWidth={1.75} />
               Simpan ke GeoNode
             </h2>
-            <p className="text-[13px] text-muted-foreground">Metadata di server akan diganti dengan XML hasil penambalan.</p>
+            <p className="text-[13px] text-muted-foreground">
+              Metadata di server diganti dengan XML hasil penambalan, lalu dibaca ulang untuk memastikan isinya tersimpan.
+            </p>
           </div>
           <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Tutup">
             <X className="h-4 w-4" strokeWidth={1.75} />
@@ -134,11 +190,37 @@ export function PushGeoNodeModal({
         </header>
 
         <form onSubmit={handleSubmit} className="space-y-5 px-6 py-5">
-          {status.type === "success" && (
-            <Notice tone="success" title="Metadata tersimpan di GeoNode">
-              <p>{status.message} GeoNetwork akan memanen perubahan ini pada jadwal berikutnya.</p>
+          {status.type === "verified" && status.report.lost.length === 0 && (
+            <Notice tone="success" title="Semua isian tersimpan di GeoNode">
+              <p>
+                {status.report.kept.length} bagian metadata sudah dibaca ulang dari GeoNode dan isinya sama dengan yang dikirim.
+              </p>
             </Notice>
           )}
+
+          {status.type === "verified" && status.report.lost.length > 0 && (
+            <Notice tone="warning" title={`Hanya ${status.report.kept.length} dari ${status.report.kept.length + status.report.lost.length} bagian yang tersimpan`}>
+              <p>
+                GeoNode menerima unggahan, tetapi membuat ulang XML dari templatnya sendiri. Bagian berikut tidak tersimpan seperti yang dikirim:
+              </p>
+              <LostParts report={status.report} />
+              <p>
+                Agar XML lengkap dipertahankan, admin GeoNode perlu membuka <span className="font-medium">Django admin → Datasets</span>, memilih
+                dataset ini, mencentang <span className="font-medium">Metadata uploaded</span> dan{" "}
+                <span className="font-medium">Metadata uploaded preserve</span>, menyimpan, lalu Anda simpan ulang dari GeoMeta.
+              </p>
+              <PreserveNote response={status.response} />
+            </Notice>
+          )}
+
+          {status.type === "unverified" && (
+            <Notice tone="warning" title="Terkirim, tetapi belum bisa dipastikan tersimpan">
+              <p>GeoNode menerima unggahan, tetapi hasilnya tidak bisa dibaca ulang: {status.reason}</p>
+              <p>Buka dataset di GeoNode, atau tarik ulang metadatanya di GeoMeta untuk memeriksa isinya.</p>
+              <PreserveNote response={status.response} />
+            </Notice>
+          )}
+
           {status.type === "error" && (
             <Notice tone="danger" title="Metadata belum tersimpan">
               <p>{status.message}</p>
@@ -206,10 +288,11 @@ export function PushGeoNodeModal({
               className={cn(checkboxClass, "mt-0.5")}
             />
             <span className="space-y-1">
-              <span className="block text-sm font-medium text-foreground">Pertahankan metadata lengkap untuk GeoNetwork</span>
+              <span className="block text-sm font-medium text-foreground">Pertahankan metadata lengkap</span>
               <span className="block text-[13px] leading-normal text-muted-foreground">
-                Mengaktifkan <code className="font-mono text-xs text-foreground">metadata_uploaded_preserve</code> agar elemen ISO 19115 tidak
-                dipangkas GeoNode saat dipanen GeoNetwork.
+                Menyalakan <code className="font-mono text-xs text-foreground">metadata_uploaded_preserve</code> sebelum mengunggah. GeoNode juga
+                memerlukan tanda <span className="font-medium text-foreground">Metadata uploaded</span> yang hanya bisa dicentang admin lewat Django
+                admin.
               </span>
             </span>
           </label>
@@ -237,7 +320,7 @@ export function PushGeoNodeModal({
               </Button>
               <Button type="submit" variant="primary" disabled={loading}>
                 {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Menyimpan" : "Simpan ke GeoNode"}
+                {loading ? "Menyimpan dan memeriksa" : "Simpan ke GeoNode"}
               </Button>
             </div>
           </div>
